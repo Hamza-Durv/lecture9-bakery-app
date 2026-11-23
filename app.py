@@ -117,6 +117,12 @@ def message_value(c,m):
 
 def fetch_orders(c):
     """Fetch each arrived new order once; requested orders reserve no hours."""
+    # Reject expired requests of every kind, including previously fetched orders.
+    for m in c.execute("SELECT * FROM messages WHERE day<=? AND status='pending' ORDER BY day,id",(today(c),)).fetchall():
+        reason,_=eligibility(c,m)
+        if reason.startswith('Too late:') and (m['kind']!='new' or c.execute('SELECT 1 FROM request_orders WHERE message_id=?',(m['id'],)).fetchone()):
+            action(c,dict(action='reject',id=m['id']))
+            c.execute("UPDATE messages SET note=? WHERE id=?",('Automatically rejected: '+reason,m['id']))
     for m in c.execute("SELECT * FROM messages WHERE day<=? AND kind='new' AND status='pending' ORDER BY day,id",(today(c),)).fetchall():
         if c.execute('SELECT 1 FROM request_orders WHERE message_id=?',(m['id'],)).fetchone(): continue
         reason,_=eligibility(c,m)
@@ -126,7 +132,7 @@ def fetch_orders(c):
         c.execute('INSERT INTO request_orders VALUES(?,?)',(m['id'],order.lastrowid))
         if reason:
             c.execute("UPDATE messages SET status='rejected',note=?,order_value=?,revenue_change=? WHERE id=?",
-                      ('Incompatible: '+reason,value(m),value(m),m['id']))
+                      ('Automatically rejected: Incompatible: '+reason,value(m),value(m),m['id']))
             c.execute('INSERT INTO audit(day,detail) VALUES(?,?)',(today(c),f"Automatically rejected incompatible order: {m['customer']} / {reason}"))
 
 def state(c):

@@ -157,6 +157,29 @@ class BakeryTests(unittest.TestCase):
             self.assertEqual(app.state(c),baseline)
             self.assertEqual(list(c.execute('PRAGMA foreign_key_check')),[])
 
+    def test_auto_reject_notice_for_every_request_kind(self):
+        with app.connect() as c:
+            for kind in ('new','change','cancel'):
+                for gap in (0,1,2):
+                    pickup='2026-11-'+str(23+gap)
+                    c.execute("INSERT INTO messages(day,customer,kind,product,quantity,pickup,raw) VALUES(?,?,?,?,?,?,?)",
+                              ('2026-11-23',f'Notice {kind} {gap}',kind,'cake',1,pickup,'test'))
+            before=[tuple(r) for r in c.execute("SELECT * FROM orders WHERE status='accepted'")]
+            result=app.state(c)
+            for m in result['messages']:
+                if m['customer'].startswith('Notice '):
+                    gap=int(m['customer'][-1])
+                    self.assertEqual(m['status'],'rejected' if gap<2 else 'pending')
+                    if gap<2: self.assertIn('Automatically rejected',m['note'])
+            self.assertEqual(before,[tuple(r) for r in c.execute("SELECT * FROM orders WHERE status='accepted'")])
+            audits=c.execute('SELECT count(*) FROM audit').fetchone()[0]
+            app.state(c)
+            self.assertEqual(c.execute('SELECT count(*) FROM audit').fetchone()[0],audits)
+            # A fetched, undecided request must also expire as the working day advances.
+            c.execute("UPDATE settings SET value='2026-11-24' WHERE key='today'")
+            app.state(c)
+            self.assertEqual(c.execute("SELECT status FROM messages WHERE customer='Notice new 2'").fetchone()[0],'rejected')
+
     def test_reset(self):
         with app.connect() as c:
             baseline=app.state(c)
